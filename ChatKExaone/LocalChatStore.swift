@@ -17,6 +17,21 @@ nonisolated struct ChatMessage: Codable, Equatable, Sendable {
     let content: String
 }
 
+nonisolated struct ChatConversation: Codable, Identifiable, Sendable {
+    let id: UUID
+    let lastQuestionAt: Date
+    let messages: [ChatMessage]
+
+    var title: String {
+        guard let question = messages.first(where: { $0.role == .user }) else {
+            return "새 대화"
+        }
+        let text = question.content.split(whereSeparator: \.isWhitespace).joined(separator: " ")
+        let prefix = text.prefix(32)
+        return prefix.endIndex == text.endIndex ? String(prefix) : String(prefix) + "…"
+    }
+}
+
 actor LocalChatStore {
     private enum KeychainError: Error {
         case status(OSStatus)
@@ -70,28 +85,45 @@ actor LocalChatStore {
         guard status == errSecSuccess else { throw KeychainError.status(status) }
     }
 
-    func loadMessages() throws -> [ChatMessage] {
-        let url = try historyURL()
+    func loadConversations() throws -> [ChatConversation] {
+        let directory = try historyDirectory()
         do {
-            let data = try Data(contentsOf: url)
-            return try JSONDecoder().decode([ChatMessage].self, from: data)
+            let data = try Data(contentsOf: directory.appendingPathComponent("chat-conversations.json"))
+            return try JSONDecoder().decode([ChatConversation].self, from: data)
         } catch CocoaError.fileReadNoSuchFile {
-            return []
+            let legacyURL = directory.appendingPathComponent("chat-history.json")
+            let data: Data
+            do {
+                data = try Data(contentsOf: legacyURL)
+            } catch CocoaError.fileReadNoSuchFile {
+                return []
+            }
+
+            let messages = try JSONDecoder().decode([ChatMessage].self, from: data)
+            guard !messages.isEmpty else { return [] }
+
+            let modifiedAt = try? legacyURL.resourceValues(forKeys: [.contentModificationDateKey])
+                .contentModificationDate
+            let conversations = [
+                ChatConversation(id: UUID(), lastQuestionAt: modifiedAt ?? .distantPast, messages: messages)
+            ]
+            try saveConversations(conversations)
+            return conversations
         }
     }
 
-    func saveMessages(_ messages: [ChatMessage]) throws {
-        let data = try JSONEncoder().encode(messages)
-        try data.write(to: historyURL(), options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
+    func saveConversations(_ conversations: [ChatConversation]) throws {
+        let data = try JSONEncoder().encode(conversations)
+        let url = try historyDirectory().appendingPathComponent("chat-conversations.json")
+        try data.write(to: url, options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
     }
 
-    private func historyURL() throws -> URL {
-        let directory = try FileManager.default.url(
+    private func historyDirectory() throws -> URL {
+        try FileManager.default.url(
             for: .applicationSupportDirectory,
             in: .userDomainMask,
             appropriateFor: nil,
             create: true
         )
-        return directory.appendingPathComponent("chat-history.json")
     }
 }

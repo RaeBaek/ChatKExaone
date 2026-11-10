@@ -18,14 +18,22 @@ struct ContentView: View {
     @State private var isLoadingLocalData = true
     @State private var isHistoryLoaded = false
     @State private var historyError: String?
+    @State private var isConversationListPresented = false
+    @State private var conversations: [ChatConversation] = []
+    @State private var activeConversationID = UUID()
+    @FocusState private var isComposerFocused: Bool
     @State private var draft = ""
-    @State private var messages: [ChatMessage] = []
     @State private var pendingMessage: ChatMessage?
     @State private var thinkingSince: ContinuousClock.Instant?
     @State private var partialReply = ""
     @State private var isSending = false
+    @State private var scrollPosition = ScrollPosition()
     @State private var isNearBottom = true
     @State private var errorMessage: String?
+
+    private var messages: [ChatMessage] {
+        conversations.first(where: { $0.id == activeConversationID })?.messages ?? []
+    }
 
     private var visibleMessages: [ChatMessage] {
         guard let pendingMessage else { return messages }
@@ -36,65 +44,82 @@ struct ContentView: View {
         let visibleMessages = self.visibleMessages
 
         NavigationStack {
-            ScrollViewReader { proxy in
-                ScrollView {
-                    LazyVStack(spacing: 12) {
-                        ForEach(visibleMessages.indices, id: \.self) { index in
-                            ChatMessageBubble(
-                                message: visibleMessages[index],
-                                thinkingSince: index == visibleMessages.count - 1 ? thinkingSince : nil
-                            )
-                        }
-                    }
-                    .padding()
-                }
-                .onChange(of: visibleMessages.count) { _, count in
-                    if count > 0, partialReply.isEmpty {
-                        proxy.scrollTo(count - 1, anchor: .bottom)
+            ScrollView {
+                LazyVStack(spacing: 12) {
+                    ForEach(visibleMessages.indices, id: \.self) { index in
+                        ChatMessageBubble(
+                            message: visibleMessages[index],
+                            thinkingSince: index == visibleMessages.count - 1 ? thinkingSince : nil
+                        )
                     }
                 }
-                .onScrollGeometryChange(for: Bool.self) { geometry in
-                    geometry.contentSize.height - geometry.visibleRect.maxY < 100
-                } action: { _, nearBottom in
-                    isNearBottom = nearBottom
+                .padding()
+            }
+            .defaultScrollAnchor(.top, for: .alignment)
+            .scrollPosition($scrollPosition)
+            .onChange(of: visibleMessages.count) { _, count in
+                if count > 0, partialReply.isEmpty {
+                    scrollPosition.scrollTo(edge: .bottom)
                 }
-                .onChange(of: partialReply) { _, reply in
-                    if !reply.isEmpty, isNearBottom {
-                        proxy.scrollTo(visibleMessages.count - 1, anchor: .bottom)
+            }
+            .onChange(of: activeConversationID) {
+                scrollPosition.scrollTo(edge: visibleMessages.isEmpty ? .top : .bottom)
+            }
+            .onScrollGeometryChange(for: Bool.self) { geometry in
+                geometry.contentSize.height - geometry.visibleRect.maxY < 100
+            } action: { _, nearBottom in
+                isNearBottom = nearBottom
+            }
+            .onChange(of: partialReply) { _, reply in
+                if !reply.isEmpty, isNearBottom, scrollPosition.edge != .bottom {
+                    scrollPosition.scrollTo(edge: .bottom)
+                }
+            }
+            .safeAreaInset(edge: .bottom, spacing: 0) {
+                composer
+            }
+            .navigationTitle("ChatKEXAONE")
+            .navigationBarTitleDisplayMode(.large)
+            .toolbar {
+                ToolbarItem(placement: .topBarLeading) {
+                    Button {
+                        isComposerFocused = false
+                        isConversationListPresented = true
+                    } label: {
+                        Label("채팅 목록", systemImage: "list.bullet")
+                            .labelStyle(.iconOnly)
                     }
+                    .disabled(!isHistoryLoaded || pendingMessage != nil)
                 }
-                .safeAreaInset(edge: .bottom, spacing: 0) {
-                    composer
-                }
-                .navigationTitle("ChatKEXAONE")
-                .navigationBarTitleDisplayMode(.large)
-                .toolbar {
-                    ToolbarItem(placement: .topBarTrailing) {
-                        Button {
-                            apiKeyDraft = apiKey
-                            isAPIKeyAlertPresented = true
-                        } label: {
-                            Image(systemName: "key")
-                                .accessibilityLabel("API 키 입력")
-                        }
-                        .disabled(isLoadingLocalData || isUpdatingAPIKey || pendingMessage != nil)
-                    }
-                }
-                .alert("API 키 입력", isPresented: $isAPIKeyAlertPresented) {
-                    SecureField("API 키", text: $apiKeyDraft)
-                        .textContentType(.password)
-                        .textInputAutocapitalization(.never)
-                        .autocorrectionDisabled()
 
-                    Button("취소", role: .cancel) {
-                        apiKeyDraft = ""
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button {
+                        apiKeyDraft = apiKey
+                        isAPIKeyAlertPresented = true
+                    } label: {
+                        Image(systemName: "key")
+                            .accessibilityLabel("API 키 입력")
                     }
-                    Button("적용") {
-                        let key = apiKeyDraft.trimmingCharacters(in: .whitespacesAndNewlines)
-                        apiKeyDraft = ""
-                        isUpdatingAPIKey = true
-                        Task { await applyAPIKey(key) }
-                    }
+                    .disabled(isLoadingLocalData || isUpdatingAPIKey || pendingMessage != nil)
+                }
+            }
+            .sheet(isPresented: $isConversationListPresented) {
+                conversationList
+            }
+            .alert("API 키 입력", isPresented: $isAPIKeyAlertPresented) {
+                SecureField("API 키", text: $apiKeyDraft)
+                    .textContentType(.password)
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled()
+
+                Button("취소", role: .cancel) {
+                    apiKeyDraft = ""
+                }
+                Button("적용") {
+                    let key = apiKeyDraft.trimmingCharacters(in: .whitespacesAndNewlines)
+                    apiKeyDraft = ""
+                    isUpdatingAPIKey = true
+                    Task { await applyAPIKey(key) }
                 }
             }
             .task {
@@ -112,6 +137,57 @@ struct ContentView: View {
                 await send(pendingMessage)
             }
         }
+    }
+
+    private var conversationList: some View {
+        NavigationStack {
+            Group {
+                if conversations.isEmpty {
+                    ContentUnavailableView("저장된 채팅이 없습니다", systemImage: "bubble.left.and.bubble.right")
+                } else {
+                    List(conversations) { conversation in
+                        Button {
+                            openConversation(conversation.id)
+                        } label: {
+                            HStack {
+                                Text(verbatim: conversation.title)
+                                Spacer()
+                                if conversation.id == activeConversationID {
+                                    Image(systemName: "checkmark")
+                                        .foregroundStyle(Color.accentColor)
+                                        .accessibilityHidden(true)
+                                }
+                            }
+                            .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityAddTraits(conversation.id == activeConversationID ? .isSelected : [])
+                    }
+                    .listStyle(.plain)
+                }
+            }
+            .navigationTitle("채팅 목록")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("닫기") { isConversationListPresented = false }
+                }
+                ToolbarItem(placement: .primaryAction) {
+                    Button("새 대화") {
+                        openConversation(UUID())
+                    }
+                }
+            }
+        }
+    }
+
+    private func openConversation(_ id: UUID) {
+        isConversationListPresented = false
+        guard id != activeConversationID else { return }
+        activeConversationID = id
+        isNearBottom = true
+        draft = ""
+        errorMessage = nil
     }
 
     private var composer: some View {
@@ -139,9 +215,11 @@ struct ContentView: View {
                 TextField("ChatKEXAONE에게 물어보세요", text: $draft, axis: .vertical)
                     .lineLimit(1...4)
                     .textFieldStyle(.roundedBorder)
+                    .focused($isComposerFocused)
                     .disabled(pendingMessage != nil)
 
                 Button("전송") {
+                    isComposerFocused = false
                     thinkingSince = ContinuousClock().now
                     pendingMessage = ChatMessage(role: .user, content: trimmedDraft)
                     draft = ""
@@ -176,7 +254,11 @@ struct ContentView: View {
     private func restoreHistory() async {
         historyError = nil
         do {
-            messages = try await Self.localStore.loadMessages()
+            conversations = try await Self.localStore.loadConversations()
+                .sorted { $0.lastQuestionAt > $1.lastQuestionAt }
+            if let mostRecent = conversations.first {
+                activeConversationID = mostRecent.id
+            }
             isHistoryLoaded = true
         } catch {
             historyError = "저장된 대화를 불러오지 못했습니다."
@@ -187,6 +269,9 @@ struct ContentView: View {
     private func send(_ message: ChatMessage) async {
         guard !isSending else { return }
         isSending = true
+        let conversationID = activeConversationID
+        let questionDate = Date()
+        let requestMessages = messages + [message]
         defer {
             thinkingSince = nil
             partialReply = ""
@@ -195,22 +280,25 @@ struct ContentView: View {
         }
 
         do {
-            let answer = try await ExaoneAPI.reply(to: messages + [message], apiKey: apiKey) { reply in
-                if partialReply.isEmpty, reply.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                    return
-                }
+            let answer = try await ExaoneAPI.reply(to: requestMessages, apiKey: apiKey) { reply in
                 partialReply = reply
             }
             try Task.checkCancellation()
 
-            let updatedMessages = messages + [message, ChatMessage(role: .assistant, content: answer)]
+            let conversation = ChatConversation(
+                id: conversationID,
+                lastQuestionAt: questionDate,
+                messages: requestMessages + [ChatMessage(role: .assistant, content: answer)]
+            )
+            let updatedConversations = ([conversation] + conversations.filter { $0.id != conversationID })
+                .sorted { $0.lastQuestionAt > $1.lastQuestionAt }
             do {
-                try await Self.localStore.saveMessages(updatedMessages)
+                try await Self.localStore.saveConversations(updatedConversations)
                 historyError = nil
             } catch {
                 historyError = "대화 저장에 실패했습니다."
             }
-            messages = updatedMessages
+            conversations = updatedConversations
         } catch {
             draft = message.content
             guard !Task.isCancelled else { return }
@@ -272,12 +360,30 @@ private struct ThinkingIndicator: View {
 
             TimelineView(.periodic(from: .now, by: 1)) { _ in
                 let elapsed = startedAt.duration(to: ContinuousClock().now)
-                let duration = Duration.seconds(elapsed.components.seconds)
-                Text("생각 중… \(duration, format: .units(allowed: [.hours, .minutes, .seconds], width: .wide))")
+                let seconds = elapsed.components.seconds
+                let duration = Duration.seconds(seconds)
+                Text("생각 중… \(shortTime(seconds))")
                     .monospacedDigit()
+                    .accessibilityLabel(
+                        Text("생각 중… \(duration, format: .units(allowed: [.hours, .minutes, .seconds], width: .wide))")
+                    )
             }
         }
         .font(.subheadline)
         .foregroundStyle(.secondary)
+    }
+
+    private func shortTime(_ seconds: Int64) -> String {
+        let hours = seconds / 3600
+        let minutes = seconds / 60 % 60
+        let remainingSeconds = seconds % 60
+
+        if hours > 0 {
+            return "\(hours)h \(minutes)m \(remainingSeconds)s"
+        }
+        if minutes > 0 {
+            return "\(minutes)m \(remainingSeconds)s"
+        }
+        return "\(remainingSeconds)s"
     }
 }

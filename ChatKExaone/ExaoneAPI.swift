@@ -1,3 +1,10 @@
+//
+//  ExaoneAPI.swift
+//  ChatKExaone
+//
+//  Created by 백래훈 on 11/10/26.
+//
+
 import Foundation
 
 nonisolated enum ExaoneAPI {
@@ -120,7 +127,9 @@ nonisolated enum ExaoneAPI {
             }
             guard let content = choice.delta.content, !content.isEmpty else { continue }
 
-            reply.append(content)
+            let fragment = reply.isEmpty ? content.drop(while: \.isWhitespace) : content[...]
+            guard !fragment.isEmpty else { continue }
+            reply.append(contentsOf: fragment)
             let now = clock.now
             if lastUpdate.map({ $0.duration(to: now) >= .milliseconds(80) }) ?? true {
                 await onPartialReply(reply)
