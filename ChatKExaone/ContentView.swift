@@ -10,6 +10,8 @@ import SwiftUI
 
 struct ContentView: View {
     @State private var apiKey = ""
+    @State private var apiKeyDraft = ""
+    @State private var isAPIKeyAlertPresented = false
     @State private var draft = ""
     @State private var messages: [ChatMessage] = []
     @State private var pendingMessage: ChatMessage?
@@ -21,72 +23,88 @@ struct ContentView: View {
 
     var body: some View {
         NavigationStack {
-            VStack(spacing: 12) {
-                SecureField("EXAONE API 키", text: $apiKey)
-                    .textContentType(.password)
-                    .textInputAutocapitalization(.never)
-                    .autocorrectionDisabled()
-                    .textFieldStyle(.roundedBorder)
-                    .disabled(pendingMessage != nil)
-
-                ScrollViewReader { proxy in
-                    ScrollView {
-                        LazyVStack(spacing: 12) {
-                            ForEach(visibleMessages.indices, id: \.self) { index in
-                                let message = visibleMessages[index]
-                                let isUser = message.role == .user
-
-                                Text(verbatim: message.content)
-                                    .padding(12)
-                                    .background(
-                                        isUser ? Color.accentColor.opacity(0.15) : Color.secondary.opacity(0.12),
-                                        in: RoundedRectangle(cornerRadius: 14)
-                                    )
-                                    .frame(maxWidth: .infinity, alignment: isUser ? .trailing : .leading)
-                                    .accessibilityLabel(Text(isUser ? "나" : "엑사원") + Text(", ") + Text(verbatim: message.content))
-                            }
-                        }
-                        .frame(maxWidth: .infinity)
-                    }
-                    .onChange(of: visibleMessages.count) { _, count in
-                        if count > 0 {
-                            proxy.scrollTo(count - 1, anchor: .bottom)
+            ScrollViewReader { proxy in
+                ScrollView {
+                    LazyVStack(spacing: 12) {
+                        ForEach(visibleMessages.indices, id: \.self) { index in
+                            ChatMessageBubble(message: visibleMessages[index])
                         }
                     }
+                    .padding()
                 }
-
-                if pendingMessage != nil {
-                    ProgressView("답변 생성 중")
+                .onChange(of: visibleMessages.count) { _, count in
+                    if count > 0 {
+                        proxy.scrollTo(count - 1, anchor: .bottom)
+                    }
                 }
-
-                if let errorMessage {
-                    Text(errorMessage)
-                        .font(.footnote)
-                        .foregroundStyle(.red)
+                .safeAreaInset(edge: .bottom, spacing: 0) {
+                    composer
                 }
-
-                HStack(alignment: .bottom) {
-                    TextField("메시지", text: $draft, axis: .vertical)
-                        .lineLimit(1...4)
-                        .textFieldStyle(.roundedBorder)
+                .navigationTitle("ChatKEXAONE")
+                .navigationBarTitleDisplayMode(.large)
+                .toolbar {
+                    ToolbarItem(placement: .topBarTrailing) {
+                        Button {
+                            apiKeyDraft = apiKey
+                            isAPIKeyAlertPresented = true
+                        } label: {
+                            Image(systemName: "key")
+                                .accessibilityLabel("API 키 입력")
+                        }
                         .disabled(pendingMessage != nil)
-
-                    Button("전송") {
-                        pendingMessage = ChatMessage(role: .user, content: trimmedDraft)
-                        draft = ""
-                        errorMessage = nil
                     }
-                    .buttonStyle(.borderedProminent)
-                    .disabled(pendingMessage != nil || trimmedKey.isEmpty || trimmedDraft.isEmpty)
+                }
+                .alert("API 키 입력", isPresented: $isAPIKeyAlertPresented) {
+                    SecureField("API 키", text: $apiKeyDraft)
+                        .textContentType(.password)
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled()
+
+                    Button("취소", role: .cancel) {
+                        apiKeyDraft = ""
+                    }
+                    Button("적용") {
+                        apiKey = apiKeyDraft
+                        apiKeyDraft = ""
+                    }
                 }
             }
-            .padding()
-            .navigationTitle("K-EXAONE 2.5")
             .task(id: pendingMessage) {
                 guard let pendingMessage else { return }
                 await send(pendingMessage)
             }
         }
+    }
+
+    private var composer: some View {
+        VStack(spacing: 12) {
+            if pendingMessage != nil {
+                ProgressView("답변 생성 중")
+            }
+
+            if let errorMessage {
+                Text(errorMessage)
+                    .font(.footnote)
+                    .foregroundStyle(.red)
+            }
+
+            HStack(alignment: .bottom) {
+                TextField("메시지", text: $draft, axis: .vertical)
+                    .lineLimit(1...4)
+                    .textFieldStyle(.roundedBorder)
+                    .disabled(pendingMessage != nil)
+
+                Button("전송") {
+                    pendingMessage = ChatMessage(role: .user, content: trimmedDraft)
+                    draft = ""
+                    errorMessage = nil
+                }
+                .buttonStyle(.borderedProminent)
+                .disabled(pendingMessage != nil || trimmedKey.isEmpty || trimmedDraft.isEmpty)
+            }
+        }
+        .padding()
+        .background(.background)
     }
 
     private var trimmedKey: String {
@@ -119,6 +137,36 @@ private struct ChatMessage: Encodable, Equatable {
 
     let role: Role
     let content: String
+}
+
+private struct ChatMessageBubble: View {
+    let message: ChatMessage
+
+    var body: some View {
+        let isUser = message.role == .user
+        let content = displayContent
+        let speaker = isUser ? Text("나") : Text("엑사원")
+
+        Text(content)
+            .padding(12)
+            .background(
+                isUser ? Color.accentColor.opacity(0.15) : Color.secondary.opacity(0.12),
+                in: RoundedRectangle(cornerRadius: 14)
+            )
+            .frame(maxWidth: .infinity, alignment: isUser ? .trailing : .leading)
+            .accessibilityLabel(Text("\(speaker), \(String(content.characters))"))
+    }
+
+    private var displayContent: AttributedString {
+        if message.role == .assistant,
+           let markdown = try? AttributedString(
+               markdown: message.content,
+               options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace)
+           ) {
+            return markdown
+        }
+        return AttributedString(message.content)
+    }
 }
 
 private enum ExaoneAPI {
