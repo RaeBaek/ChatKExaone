@@ -2,6 +2,8 @@
 
 K-EXAONE 2.5와 대화할 수 있는 SwiftUI iOS 앱입니다. 답변을 스트리밍으로 표시하고, 기기에 저장된 대화를 다시 열어 이어갈 수 있습니다.
 
+SwiftUI와 스트리밍 API 연동을 연습하기 위해 만든 비상업적 개인 프로젝트입니다. LG AI연구원의 공식 ChatEXAONE 서비스와는 별개로 개발했습니다.
+
 ## 스트리밍을 도입한 이유
 
 초기 구현에서는 서버가 답변 생성을 끝낼 때까지 기다렸고, 일부 긴 응답에서 요청 타임아웃이 발생했습니다. 이후 [EXAONE API의 SSE 응답 형식](https://docs.exaone.ai/ko/docs/k-exaone-2.5)에 맞춰 `URLSession.bytes(for:)`로 답변을 순차 수신하도록 바꿨습니다.
