@@ -8,31 +8,10 @@
 import Foundation
 import Security
 
-nonisolated struct ChatMessage: Codable, Equatable, Sendable {
-    enum Role: String, Codable, Sendable {
-        case user, assistant
-    }
-
-    let role: Role
-    let content: String
-}
-
-nonisolated struct ChatConversation: Codable, Identifiable, Sendable {
-    let id: UUID
-    let lastQuestionAt: Date
-    let messages: [ChatMessage]
-
-    var title: String {
-        guard let question = messages.first(where: { $0.role == .user }) else {
-            return "새 대화"
-        }
-        let text = question.content.split(whereSeparator: \.isWhitespace).joined(separator: " ")
-        let prefix = text.prefix(32)
-        return prefix.endIndex == text.endIndex ? String(prefix) : String(prefix) + "…"
-    }
-}
-
+/// Keychain과 로컬 대화 파일에 대한 접근을 직렬화한다.
 actor LocalChatStore {
+    // MARK: - API 키
+
     private enum KeychainError: Error {
         case status(OSStatus)
         case invalidData
@@ -63,6 +42,7 @@ actor LocalChatStore {
         return key
     }
 
+    /// 저장된 키를 갱신한다. 빈 문자열을 받으면 Keychain 항목을 삭제한다.
     func saveAPIKey(_ key: String) throws {
         let query = keyQuery
         if key.isEmpty {
@@ -85,6 +65,9 @@ actor LocalChatStore {
         guard status == errSecSuccess else { throw KeychainError.status(status) }
     }
 
+    // MARK: - 대화 내역
+
+    /// 목록 파일이 없으면 이전 버전의 단일 대화 파일을 읽어 목록 형식으로 저장한다.
     func loadConversations() throws -> [ChatConversation] {
         let directory = try historyDirectory()
         do {
@@ -102,6 +85,7 @@ actor LocalChatStore {
             let messages = try JSONDecoder().decode([ChatMessage].self, from: data)
             guard !messages.isEmpty else { return [] }
 
+            // 이전 파일에는 질문 시각이 없으므로 파일 수정 시각을 정렬 기준으로 사용한다.
             let modifiedAt = try? legacyURL.resourceValues(forKeys: [.contentModificationDateKey])
                 .contentModificationDate
             let conversations = [
@@ -112,6 +96,7 @@ actor LocalChatStore {
         }
     }
 
+    /// 대화 목록 전체를 원자적으로 교체해 쓰기가 중단돼도 일부만 기록된 파일이 남지 않게 한다.
     func saveConversations(_ conversations: [ChatConversation]) throws {
         let data = try JSONEncoder().encode(conversations)
         let url = try historyDirectory().appendingPathComponent("chat-conversations.json")
