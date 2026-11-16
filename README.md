@@ -1,4 +1,4 @@
-# ChatKEXAONE
+# ChatKExaone
 
 K-EXAONE 2.5와 대화할 수 있는 SwiftUI iOS 앱입니다. 답변을 스트리밍으로 표시하고, 기기에 저장된 대화를 다시 열어 이어갈 수 있습니다.
 
